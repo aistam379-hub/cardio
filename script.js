@@ -3904,7 +3904,12 @@ if('serviceWorker'in navigator){window.addEventListener('load',function(){naviga
       // لا توجد إضبارة لهذا المريض — أنشئها من بيانات الموعد
       var newP = {
         name: r.PatientName || '-', phone: r.Phone || '', address: r.Address || '',
-        bloodType: '', chronicDiseases: '', birthDate: '', appointments: [], totalVisits: 0
+        bloodType: '', chronicDiseases: '', birthDate: '', appointments: [], totalVisits: 0,
+        sex: '', heightCm: '',
+        allergyStatus: 'unknown', allergies: '',
+        riskFactors: {}, currentMeds: [], interventions: [],
+        anticoag: { on: 'unknown', type: '' },
+        kidney: { creat: '', unit: 'mgdl', date: '' }
       };
       window._fb.addDoc(window._fb.col('patients'), newP)
         .then(function(ref) {
@@ -3929,6 +3934,138 @@ if('serviceWorker'in navigator){window.addEventListener('load',function(){naviga
       openChartFromAppt(upcoming[0].id); // يفتح الإضبارة (وينشئها إن لزم) — أقل تكلفة
     };
 
+    // ═══════ أقسام الإضبارة السريرية ═══════
+    function _chartSection(title, icon, color, inner) {
+      return '<div style="margin-top:12px;border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--bg);">'
+        + '<div style="font-size:.74rem;font-weight:800;color:' + color + ';margin-bottom:7px;">'
+        + '<i class="fas ' + icon + '" style="margin-left:5px;"></i>' + title + '</div>'
+        + inner + '</div>';
+    }
+    function _pill(text, bg, bd, fg) {
+      return '<span style="background:' + bg + ';border:1.5px solid ' + bd + ';border-radius:9px;padding:4px 10px;'
+        + 'font-size:.78rem;font-weight:800;color:' + fg + ';display:inline-block;">' + text + '</span>';
+    }
+
+    /* الحساسية — أبرز عنصر. "غير مسجّلة" تُعرض كتحذير كهرماني وليست صمتاً:
+       غياب التسجيل ليس دليلاً على غياب الحساسية. */
+    function _allergyBannerHtml(p) {
+      var st = p.allergyStatus || 'unknown';
+      if (st === 'known' && (p.allergies || '').trim()) {
+        return '<div style="background:#fef2f2;border:2px solid #dc2626;border-radius:12px;padding:11px 13px;margin-bottom:12px;">'
+          + '<div style="font-size:.74rem;font-weight:800;color:#b91c1c;margin-bottom:3px;">'
+          + '<i class="fas fa-triangle-exclamation" style="margin-left:5px;"></i>حساسية دوائية</div>'
+          + '<div style="font-size:.92rem;font-weight:800;color:#b91c1c;line-height:1.6;white-space:pre-wrap;word-break:break-word;">'
+          + escapeHtml(p.allergies) + '</div></div>';
+      }
+      if (st === 'none') {
+        return '<div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:10px;padding:7px 11px;margin-bottom:12px;'
+          + 'font-size:.78rem;font-weight:700;color:#15803d;">'
+          + '<i class="fas fa-circle-check" style="margin-left:5px;"></i>لا توجد حساسية دوائية معروفة</div>';
+      }
+      return '<div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:10px;padding:7px 11px;margin-bottom:12px;'
+        + 'font-size:.78rem;font-weight:700;color:#b45309;">'
+        + '<i class="fas fa-circle-question" style="margin-left:5px;"></i>الحساسية الدوائية غير مسجّلة — يُرجى سؤال المريض</div>';
+    }
+
+    function _anticoagHtml(p) {
+      var ac = p.anticoag || {};
+      if (ac.on !== 'yes') return '';
+      var label = ANTICOAG_LABELS[ac.type] || 'غير محدد النوع';
+      var warn  = (ac.type === 'warfarin')
+        ? '<div style="font-size:.76rem;font-weight:700;color:#b45309;margin-top:6px;">'
+          + '<i class="fas fa-circle-info" style="margin-left:4px;"></i>وارفارين — يحتاج مراقبة INR دورية</div>'
+        : '';
+      return _chartSection('مميّع الدم', 'fa-droplet', '#2563eb',
+        _pill(escapeHtml(label), '#eff6ff', '#bfdbfe', '#1d4ed8') + warn);
+    }
+
+    function _riskFactorsHtml(p) {
+      var rf = p.riskFactors;
+      if (!rf) return '';
+      var yes = [], unknown = [];
+      CARDIO_RISK_FACTORS.forEach(function(f) {
+        if (rf[f.key] === 'yes') yes.push(f.label);
+        else if (rf[f.key] !== 'no') unknown.push(f.label);
+      });
+      if (!yes.length && !unknown.length) return '';
+      var inner = '';
+      if (yes.length) {
+        inner += '<div style="display:flex;gap:7px;flex-wrap:wrap;">'
+          + yes.map(function(t) { return _pill(escapeHtml(t), '#fef2f2', '#fecaca', '#b91c1c'); }).join('')
+          + '</div>';
+      } else {
+        inner += '<div style="font-size:.78rem;color:#15803d;font-weight:700;">لا عوامل خطورة مسجّلة</div>';
+      }
+      if (unknown.length) {
+        inner += '<div style="font-size:.72rem;color:#b45309;font-weight:700;margin-top:7px;">'
+          + '<i class="fas fa-circle-question" style="margin-left:4px;"></i>غير معروف: ' + escapeHtml(unknown.join('، ')) + '</div>';
+      }
+      return _chartSection('عوامل الخطورة القلبية', 'fa-heart-crack', '#d97706', inner);
+    }
+
+    function _currentMedsHtml(p) {
+      var meds = p.currentMeds || [];
+      if (!meds.length) return '';
+      var rows = meds.map(function(m) {
+        var extra = [m.dose, m.freq].filter(function(x) { return (x || '').trim(); }).join(' · ');
+        return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;'
+          + 'background:var(--surface);border:1px solid var(--border);border-radius:8px;">'
+          + '<span style="font-size:.84rem;font-weight:800;color:var(--text-primary);">' + escapeHtml(m.name) + '</span>'
+          + (extra ? '<span style="font-size:.76rem;font-weight:700;color:var(--text-muted);">' + escapeHtml(extra) + '</span>' : '')
+          + '</div>';
+      }).join('');
+      return _chartSection('الأدوية الجارية (' + meds.length + ')', 'fa-pills', '#7c3aed',
+        '<div style="display:flex;flex-direction:column;gap:6px;">' + rows + '</div>');
+    }
+
+    function _interventionsHtml(p) {
+      var iv = p.interventions || [];
+      if (!iv.length) return '';
+      var rows = iv.map(function(v) {
+        var meta = [v.date ? formatDateAr(v.date) : '', v.detail || ''].filter(function(x) { return (x || '').trim(); }).join(' · ');
+        return '<div style="padding:6px 9px;background:var(--surface);border:1px solid var(--border);border-radius:8px;">'
+          + '<div style="font-size:.84rem;font-weight:800;color:var(--text-primary);">' + escapeHtml(v.type) + '</div>'
+          + (meta ? '<div style="font-size:.74rem;font-weight:700;color:var(--text-muted);margin-top:2px;">' + escapeHtml(meta) + '</div>' : '')
+          + '</div>';
+      }).join('');
+      return _chartSection('التداخلات القلبية السابقة (' + iv.length + ')', 'fa-heart-pulse', '#be185d',
+        '<div style="display:flex;flex-direction:column;gap:6px;">' + rows + '</div>');
+    }
+
+    /* إذا وُجد كرياتينين لكن تعذّر حساب eGFR — نوضّح ما الذي ينقص بدل الصمت. */
+    function _kidneyNoteHtml(p, egfr, st) {
+      var kf = p.kidney || {};
+      if (!creatToMgDl(kf.creat, kf.unit)) return '';
+      var unitLbl = (kf.unit === 'umol') ? 'µmol/L' : 'mg/dL';
+      var inner = '<div style="font-size:.82rem;font-weight:700;color:var(--text-primary);">'
+        + 'الكرياتينين: <span dir="ltr">' + escapeHtml(String(kf.creat)) + ' ' + unitLbl + '</span>'
+        + (kf.date ? ' <span style="font-weight:600;color:var(--text-muted);">(' + formatDateAr(kf.date) + ')</span>' : '')
+        + '</div>';
+
+      if (egfr != null) {
+        inner += '<div style="font-size:.82rem;font-weight:800;margin-top:5px;color:' + st.color + ';">'
+          + 'eGFR ≈ ' + egfr + ' mL/min/1.73m² — ' + st.text
+          + ' <span style="font-weight:600;opacity:.72;">(CKD-EPI 2021 — تقديري)</span></div>';
+      } else {
+        var missing = [];
+        if (p.sex !== 'male' && p.sex !== 'female') missing.push('الجنس');
+        if (!p.birthDate) missing.push('تاريخ الميلاد');
+        inner += '<div style="font-size:.78rem;font-weight:700;margin-top:5px;color:#b45309;">'
+          + '<i class="fas fa-circle-info" style="margin-left:4px;"></i>'
+          + (missing.length ? 'لا يمكن حساب eGFR — ناقص: ' + escapeHtml(missing.join('، '))
+                            : 'eGFR غير محسوب (المعادلة للبالغين ≥ 18 سنة)')
+          + '</div>';
+      }
+      return _chartSection('الوظيفة الكلوية', 'fa-flask', '#16a34a', inner);
+    }
+
+    function _chronicHtml(p) {
+      if (!(p.chronicDiseases || '').trim()) return '';
+      return _chartSection('ملاحظات مرضية أخرى', 'fa-notes-medical', '#d97706',
+        '<div style="font-size:.84rem;font-weight:700;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:#d97706;">'
+        + escapeHtml(p.chronicDiseases) + '</div>');
+    }
+
     window.openPatientDetailsModal = function(pid) {
       var p = allPatients[pid]; if (!p) return;
       currentPatientIdForVisit = pid;
@@ -3943,16 +4080,36 @@ if('serviceWorker'in navigator){window.addEventListener('load',function(){naviga
           + '<div style="font-size:.68rem;color:var(--text-muted);font-weight:600;margin-bottom:2px;">' + label + '</div>'
           + '<div style="font-size:.86rem;font-weight:700;word-break:break-word;overflow-wrap:anywhere;color:' + (color || 'var(--text-primary)') + ';">' + (val || '-') + '</div></div>';
       }
+      // ── شريط الحساسية الدوائية (أبرز عنصر في الإضبارة) ──
+      document.getElementById('chartAllergyBanner').innerHTML = _allergyBannerHtml(p);
+
+      // ── BMI و eGFR ──
+      var w    = _latestWeight(p);
+      var bmi  = calcBmi(w, p.heightCm);
+      var kf   = p.kidney || {};
+      var egfr = calcEgfr(creatToMgDl(kf.creat, kf.unit), age, p.sex);
+      var est  = egfrStage(egfr);
+
       document.getElementById('chartInfoGrid').innerHTML =
         chip('رقم الهاتف', '<span dir="ltr">' + escapeHtml(p.phone || '-') + '</span>')
+        + chip('الجنس', p.sex === 'male' ? 'ذكر' : (p.sex === 'female' ? 'أنثى' : '-'), p.sex ? 'var(--text-primary)' : 'var(--text-muted)')
         + chip('تاريخ الميلاد', p.birthDate ? formatDateAr(p.birthDate) : '-')
         + chip('العمر', age != null ? age + ' سنة' : '-')
         + chip('زمرة الدم', p.bloodType ? escapeHtml(p.bloodType) : '-', p.bloodType ? '#dc2626' : 'var(--text-muted)')
+        + chip('الطول', p.heightCm ? p.heightCm + ' سم' : '-')
+        + chip('BMI', bmi != null ? bmi + ' — ' + bmiLabel(bmi) : '-', bmi != null && bmi >= 25 ? '#d97706' : undefined)
+        + chip('eGFR', egfr != null ? egfr + ' <span style="font-size:.66rem;font-weight:600;opacity:.7;">mL/min</span>' : '-', egfr != null ? est.color : undefined)
         + chip('العنوان', escapeHtml(p.address || '-'))
-        + chip('إجمالي الزيارات', String(p.totalVisits || (p.appointments ? p.appointments.length : 0)))
-        + '<div style="grid-column:1/-1;background:var(--bg);border:1.5px solid var(--border);border-radius:10px;padding:8px 11px;min-width:0;">'
-          + '<div style="font-size:.68rem;color:var(--text-muted);font-weight:600;margin-bottom:2px;">أمراض مزمنة</div>'
-          + '<div style="font-size:.86rem;font-weight:700;word-break:break-word;overflow-wrap:anywhere;line-height:1.7;max-height:160px;overflow-y:auto;color:' + (p.chronicDiseases ? '#d97706' : 'var(--text-muted)') + ';">' + escapeHtml(p.chronicDiseases || 'لا يوجد') + '</div></div>';
+        + chip('إجمالي الزيارات', String(p.totalVisits || (p.appointments ? p.appointments.length : 0)));
+
+      document.getElementById('chartClinicalExtra').innerHTML =
+          _anticoagHtml(p)
+        + _riskFactorsHtml(p)
+        + _currentMedsHtml(p)
+        + _interventionsHtml(p)
+        + _kidneyNoteHtml(p, egfr, est)
+        + _chronicHtml(p);
+
       renderChartVisits(pid);
       if (typeof chartResetBooking === 'function') chartResetBooking(pid);
       document.getElementById('patientDetailsModal').classList.remove('hidden');
@@ -4287,6 +4444,8 @@ if('serviceWorker'in navigator){window.addEventListener('load',function(){naviga
       var s = 'المريض: ' + (p.name || '-') + '\nالعمر: ' + age;
       if (p.phone) s += '\nالهاتف: ' + p.phone;
       if (p.bloodType) s += '\nزمرة الدم: ' + p.bloodType;
+      // الحساسية تسبق كل شيء آخر — الصيدلية تحتاجها قبل صرف أي دواء
+      if (p.allergyStatus === 'known' && (p.allergies || '').trim()) s += '\n⚠️ حساسية دوائية: ' + p.allergies;
       if (p.chronicDiseases) s += '\nأمراض مزمنة: ' + p.chronicDiseases;
       return s;
     }
@@ -4374,33 +4533,281 @@ if('serviceWorker'in navigator){window.addEventListener('load',function(){naviga
     };
 
     // ===== تعديل معلومات المريض =====
-    window.openPatientInfoEditor = function(pid) {
-      var p = allPatients[pid]; if (!p) return;
-      document.getElementById('piPatientId').value = pid;
-      document.getElementById('piName').value = p.name || '';
-      document.getElementById('piPhone').value = p.phone || '';
-      document.getElementById('piBirth').value = p.birthDate || '';
-      document.getElementById('piAddress').value = p.address || '';
-      document.getElementById('piBlood').value = p.bloodType || '';
-      document.getElementById('piChronic').value = p.chronicDiseases || '';
-      updatePiAge();
-      document.getElementById('patientInfoModal').classList.remove('hidden');
+
+    /* عوامل الخطورة القلبية — ثلاثية القيمة عمداً:
+       'yes' / 'no' / 'unknown'. التمييز بين "لا يوجد سكري" (مُسجَّل) و"غير معروف"
+       (لم يُسأل) ضروري: أي حساب قلبي لاحق يجب أن يرفض العمل على بيانات ناقصة
+       بدل أن يفترضها صفراً ويُخرج نتيجة أقل من الحقيقة. */
+    var CARDIO_RISK_FACTORS = [
+      { key: 'smoking',        label: 'تدخين' },
+      { key: 'diabetes',       label: 'سكري' },
+      { key: 'hypertension',   label: 'ارتفاع ضغط' },
+      { key: 'dyslipidemia',   label: 'فرط شحوم' },
+      { key: 'familyHistory',  label: 'قصة عائلية لمرض إكليلي باكر' }
+    ];
+    var INTERVENTION_TYPES = [
+      'قثطرة تشخيصية', 'قثطرة + ستنت (PCI)', 'مجازة إكليلية (CABG)',
+      'بيسميكر', 'مقوّم نظم مزروع (ICD)', 'تبديل / إصلاح صمام', 'استئصال كهربائي (Ablation)'
+    ];
+    var ANTICOAG_LABELS = {
+      warfarin:     'وارفارين',
+      doac:         'DOAC',
+      antiplatelet: 'مضاد صفيحات'
     };
+
+    // حالة مؤقتة أثناء فتح النموذج فقط
+    var _piMeds = [], _piInterv = [];
+
+    // آخر وزن مسجّل (من العلامات الحيوية لأحدث زيارة) — يُستخدم لحساب BMI
+    function _latestWeight(p) {
+      var visits = (p && p.appointments) || [];
+      for (var i = visits.length - 1; i >= 0; i--) {
+        var w = visits[i] && visits[i].vitals && visits[i].vitals.weight;
+        var n = parseFloat(w);
+        if (!isNaN(n) && n > 0) return n;
+      }
+      return null;
+    }
+
+    function calcBmi(weightKg, heightCm) {
+      var w = parseFloat(weightKg), h = parseFloat(heightCm);
+      if (!w || !h || h <= 0) return null;
+      var m = h / 100;
+      return Math.round((w / (m * m)) * 10) / 10;
+    }
+    function bmiLabel(bmi) {
+      if (bmi == null) return '';
+      if (bmi < 18.5) return 'نقص وزن';
+      if (bmi < 25)   return 'طبيعي';
+      if (bmi < 30)   return 'زيادة وزن';
+      return 'بدانة';
+    }
+
+    /* الكرياتينين → mg/dL (المعادلة تتطلّب mg/dL) */
+    function creatToMgDl(value, unit) {
+      var v = parseFloat(value);
+      if (isNaN(v) || v <= 0) return null;
+      return unit === 'umol' ? (v / 88.4) : v;   // 1 mg/dL ≈ 88.4 µmol/L
+    }
+
+    /* eGFR — معادلة CKD-EPI 2021 (بلا عامل العرق).
+       تُرجع null إذا نقص أي مُدخل — لا تفترض قيمة افتراضية أبداً. */
+    function calcEgfr(creatMgDl, age, sex) {
+      if (!creatMgDl || creatMgDl <= 0) return null;
+      if (age == null || age < 18) return null;          // المعادلة للبالغين فقط
+      if (sex !== 'male' && sex !== 'female') return null;
+      var isF = (sex === 'female');
+      var k = isF ? 0.7 : 0.9;
+      var a = isF ? -0.241 : -0.302;
+      var r = creatMgDl / k;
+      var e = 142 * Math.pow(Math.min(r, 1), a) * Math.pow(Math.max(r, 1), -1.200) * Math.pow(0.9938, age);
+      if (isF) e *= 1.012;
+      return Math.round(e);
+    }
+    function egfrStage(e) {
+      if (e == null) return { text: '', color: 'var(--text-muted)' };
+      if (e >= 90) return { text: 'وظيفة كلوية طبيعية (G1)',      color: '#16a34a' };
+      if (e >= 60) return { text: 'نقص خفيف (G2)',                color: '#16a34a' };
+      if (e >= 45) return { text: 'نقص خفيف–متوسط (G3a)',         color: '#d97706' };
+      if (e >= 30) return { text: 'نقص متوسط–شديد (G3b)',         color: '#d97706' };
+      if (e >= 15) return { text: 'نقص شديد (G4) — راجع الجرعات', color: '#dc2626' };
+      return              { text: 'قصور كلوي (G5) — راجع الجرعات', color: '#dc2626' };
+    }
+
+    // ── مدخلات النموذج الحيّة ──
     window.updatePiAge = function() {
       var b = document.getElementById('piBirth').value;
       var el = document.getElementById('piAgeDisplay'); if (!el) return;
       var a = b ? calculateAge(b) : null;
       el.textContent = (a != null && a >= 0) ? '(' + a + ' سنة)' : '';
+      updatePiEgfr();
     };
+    window.updatePiBmi = function() {
+      var el = document.getElementById('piBmiDisplay'); if (!el) return;
+      var pid = document.getElementById('piPatientId').value;
+      var p = allPatients[pid];
+      var w = p ? _latestWeight(p) : null;
+      var h = document.getElementById('piHeight').value;
+      if (!h) { el.textContent = ''; return; }
+      if (w == null) { el.textContent = 'BMI: يحتاج وزناً مسجّلاً في زيارة'; el.style.color = 'var(--text-muted)'; return; }
+      var bmi = calcBmi(w, h);
+      el.textContent = 'BMI: ' + bmi + ' — ' + bmiLabel(bmi) + ' (وزن ' + w + 'kg)';
+      el.style.color = (bmi >= 25) ? '#d97706' : '#16a34a';
+    };
+    window.updatePiAllergy = function() {
+      var st = document.getElementById('piAllergyStatus').value;
+      document.getElementById('piAllergies').style.display = (st === 'known') ? 'block' : 'none';
+    };
+    window.updatePiAnticoag = function() {
+      var on = document.getElementById('piAnticoagOn').value;
+      document.getElementById('piAnticoagTypeWrap').style.display = (on === 'yes') ? 'block' : 'none';
+    };
+    window.updatePiEgfr = function() {
+      var el = document.getElementById('piEgfrDisplay'); if (!el) return;
+      var creat = creatToMgDl(document.getElementById('piCreat').value, document.getElementById('piCreatUnit').value);
+      var birth = document.getElementById('piBirth').value;
+      var age   = birth ? calculateAge(birth) : null;
+      var sex   = document.getElementById('piSex').value;
+
+      if (!creat) { el.textContent = ''; return; }
+
+      // لا نحسب على بيانات ناقصة — نقول للطبيب ما الذي ينقص بالضبط
+      var missing = [];
+      if (sex !== 'male' && sex !== 'female') missing.push('الجنس');
+      if (age == null) missing.push('تاريخ الميلاد');
+      if (missing.length) {
+        el.innerHTML = '<i class="fas fa-circle-info"></i> لا يمكن حساب eGFR — ناقص: ' + missing.join('، ');
+        el.style.color = '#d97706';
+        return;
+      }
+      var e = calcEgfr(creat, age, sex);
+      if (e == null) { el.innerHTML = '<i class="fas fa-circle-info"></i> eGFR غير محسوب (المعادلة للبالغين ≥ 18 سنة)'; el.style.color = 'var(--text-muted)'; return; }
+      var st = egfrStage(e);
+      el.innerHTML = '<b>eGFR ≈ ' + e + '</b> mL/min/1.73m² — ' + st.text
+                   + ' <span style="font-weight:600;opacity:.75;">(CKD-EPI 2021 — تقديري)</span>';
+      el.style.color = st.color;
+    };
+
+    // ── الأدوية الجارية ──
+    function piRenderMeds() {
+      var box = document.getElementById('piMedsList'); if (!box) return;
+      if (!_piMeds.length) {
+        box.innerHTML = '<div style="font-size:.78rem;color:var(--text-muted);padding:8px;text-align:center;border:1.5px dashed var(--border);border-radius:8px;">لا توجد أدوية مسجّلة</div>';
+        return;
+      }
+      box.innerHTML = _piMeds.map(function(m, i) {
+        return '<div style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;align-items:center;">'
+          + '<input type="text" class="form-input" placeholder="اسم الدواء" value="' + escapeHtml(m.name || '') + '" oninput="piSetMed(' + i + ',\'name\',this.value)">'
+          + '<input type="text" class="form-input" placeholder="الجرعة" value="' + escapeHtml(m.dose || '') + '" oninput="piSetMed(' + i + ',\'dose\',this.value)">'
+          + '<input type="text" class="form-input" placeholder="التواتر" value="' + escapeHtml(m.freq || '') + '" oninput="piSetMed(' + i + ',\'freq\',this.value)">'
+          + '<button type="button" onclick="piRemoveMed(' + i + ')" style="width:34px;height:34px;border-radius:8px;border:1.5px solid #fecaca;background:#fef2f2;color:#dc2626;cursor:pointer;flex-shrink:0;"><i class="fas fa-trash" style="font-size:.75rem;"></i></button>'
+          + '</div>';
+      }).join('');
+    }
+    window.piAddMed    = function() { _piMeds.push({ name: '', dose: '', freq: '' }); piRenderMeds(); };
+    window.piSetMed    = function(i, k, v) { if (_piMeds[i]) _piMeds[i][k] = v; };
+    window.piRemoveMed = function(i) { _piMeds.splice(i, 1); piRenderMeds(); };
+
+    // ── التداخلات القلبية السابقة ──
+    function piRenderInterv() {
+      var box = document.getElementById('piIntervList'); if (!box) return;
+      if (!_piInterv.length) {
+        box.innerHTML = '<div style="font-size:.78rem;color:var(--text-muted);padding:8px;text-align:center;border:1.5px dashed var(--border);border-radius:8px;">لا توجد تداخلات مسجّلة</div>';
+        return;
+      }
+      box.innerHTML = _piInterv.map(function(v, i) {
+        var opts = '<option value="">— النوع —</option>' + INTERVENTION_TYPES.map(function(t) {
+          return '<option' + (v.type === t ? ' selected' : '') + '>' + t + '</option>';
+        }).join('');
+        return '<div style="display:grid;grid-template-columns:1.4fr 1fr 1.4fr auto;gap:8px;align-items:center;">'
+          + '<select class="form-input" onchange="piSetInterv(' + i + ',\'type\',this.value)">' + opts + '</select>'
+          + '<input type="date" class="form-input" style="direction:ltr;" value="' + escapeHtml(v.date || '') + '" onchange="piSetInterv(' + i + ',\'date\',this.value)">'
+          + '<input type="text" class="form-input" placeholder="تفاصيل (الشريان / النوع)" value="' + escapeHtml(v.detail || '') + '" oninput="piSetInterv(' + i + ',\'detail\',this.value)">'
+          + '<button type="button" onclick="piRemoveInterv(' + i + ')" style="width:34px;height:34px;border-radius:8px;border:1.5px solid #fecaca;background:#fef2f2;color:#dc2626;cursor:pointer;flex-shrink:0;"><i class="fas fa-trash" style="font-size:.75rem;"></i></button>'
+          + '</div>';
+      }).join('');
+    }
+    window.piAddIntervention = function() { _piInterv.push({ type: '', date: '', detail: '' }); piRenderInterv(); };
+    window.piSetInterv       = function(i, k, v) { if (_piInterv[i]) _piInterv[i][k] = v; };
+    window.piRemoveInterv    = function(i) { _piInterv.splice(i, 1); piRenderInterv(); };
+
+    // ── عوامل الخطورة (ثلاثية) ──
+    function piRenderRisks(rf) {
+      var box = document.getElementById('piRiskGrid'); if (!box) return;
+      box.innerHTML = CARDIO_RISK_FACTORS.map(function(f) {
+        var cur = (rf && rf[f.key]) || 'unknown';
+        return '<div>'
+          + '<div style="font-size:.74rem;font-weight:700;color:var(--text-secondary);margin-bottom:4px;">' + f.label + '</div>'
+          + '<select class="form-input" id="piRisk_' + f.key + '" style="font-size:.8rem;padding:6px 8px;">'
+            + '<option value="unknown"' + (cur === 'unknown' ? ' selected' : '') + '>— غير معروف —</option>'
+            + '<option value="no"'      + (cur === 'no'      ? ' selected' : '') + '>لا</option>'
+            + '<option value="yes"'     + (cur === 'yes'     ? ' selected' : '') + '>نعم</option>'
+          + '</select></div>';
+      }).join('');
+    }
+
+    // ── فتح / حفظ ──
+    window.openPatientInfoEditor = function(pid) {
+      var p = allPatients[pid]; if (!p) return;
+      document.getElementById('piPatientId').value = pid;
+      document.getElementById('piName').value    = p.name || '';
+      document.getElementById('piPhone').value   = p.phone || '';
+      document.getElementById('piBirth').value   = p.birthDate || '';
+      document.getElementById('piAddress').value = p.address || '';
+      document.getElementById('piBlood').value   = p.bloodType || '';
+      document.getElementById('piChronic').value = p.chronicDiseases || '';
+
+      document.getElementById('piSex').value    = p.sex || '';
+      document.getElementById('piHeight').value = p.heightCm || '';
+
+      document.getElementById('piAllergyStatus').value = p.allergyStatus || 'unknown';
+      document.getElementById('piAllergies').value     = p.allergies || '';
+
+      var ac = p.anticoag || {};
+      document.getElementById('piAnticoagOn').value   = ac.on || 'unknown';
+      document.getElementById('piAnticoagType').value = ac.type || '';
+
+      var kf = p.kidney || {};
+      document.getElementById('piCreat').value     = (kf.creat != null ? kf.creat : '');
+      document.getElementById('piCreatUnit').value = kf.unit || 'mgdl';
+      document.getElementById('piCreatDate').value = kf.date || '';
+
+      _piMeds   = (p.currentMeds   || []).map(function(m) { return { name: m.name || '', dose: m.dose || '', freq: m.freq || '' }; });
+      _piInterv = (p.interventions || []).map(function(v) { return { type: v.type || '', date: v.date || '', detail: v.detail || '' }; });
+
+      piRenderRisks(p.riskFactors);
+      piRenderMeds();
+      piRenderInterv();
+      updatePiAge();
+      updatePiBmi();
+      updatePiAllergy();
+      updatePiAnticoag();
+      updatePiEgfr();
+      document.getElementById('patientInfoModal').classList.remove('hidden');
+    };
+
     window.closePatientInfoEditor = function() { document.getElementById('patientInfoModal').classList.add('hidden'); };
+
     window.savePatientInfo = function() {
       var pid = document.getElementById('piPatientId').value; var p = allPatients[pid]; if (!p) return;
-      p.name = document.getElementById('piName').value.trim() || p.name;
-      p.phone = document.getElementById('piPhone').value.trim();
-      p.birthDate = document.getElementById('piBirth').value;
-      p.address = document.getElementById('piAddress').value.trim();
-      p.bloodType = document.getElementById('piBlood').value;
+      p.name           = document.getElementById('piName').value.trim() || p.name;
+      p.phone          = document.getElementById('piPhone').value.trim();
+      p.birthDate      = document.getElementById('piBirth').value;
+      p.address        = document.getElementById('piAddress').value.trim();
+      p.bloodType      = document.getElementById('piBlood').value;
       p.chronicDiseases = document.getElementById('piChronic').value.trim();
+
+      p.sex      = document.getElementById('piSex').value;
+      var h      = parseInt(document.getElementById('piHeight').value, 10);
+      p.heightCm = (!isNaN(h) && h > 0) ? h : '';
+
+      var allergySt = document.getElementById('piAllergyStatus').value;
+      p.allergyStatus = allergySt;
+      p.allergies     = (allergySt === 'known') ? document.getElementById('piAllergies').value.trim() : '';
+
+      var acOn = document.getElementById('piAnticoagOn').value;
+      p.anticoag = {
+        on:   acOn,
+        type: (acOn === 'yes') ? document.getElementById('piAnticoagType').value : ''
+      };
+
+      var creatRaw = document.getElementById('piCreat').value;
+      p.kidney = {
+        creat: creatRaw === '' ? '' : parseFloat(creatRaw),
+        unit:  document.getElementById('piCreatUnit').value,
+        date:  document.getElementById('piCreatDate').value
+      };
+
+      var rf = {};
+      CARDIO_RISK_FACTORS.forEach(function(f) {
+        var el = document.getElementById('piRisk_' + f.key);
+        rf[f.key] = el ? el.value : 'unknown';
+      });
+      p.riskFactors = rf;
+
+      p.currentMeds   = _piMeds.filter(function(m)   { return (m.name || '').trim(); });
+      p.interventions = _piInterv.filter(function(v) { return (v.type || '').trim(); });
+
       window._fb.setDoc(window._fb.docRef('patients', pid), p, { merge: true })
         .then(function() { showToast('تم حفظ المعلومات', 'success'); })
         .catch(function(e) { showToast('فشل الحفظ', 'error'); console.error(e); });
@@ -4541,14 +4948,48 @@ if('serviceWorker'in navigator){window.addEventListener('load',function(){naviga
       var p = allPatients[pid]; if (!p) return;
       var age = p.birthDate ? calculateAge(p.birthDate) : null;
       function cell(k, val, full) { return '<div class="info-cell' + (full ? ' full' : '') + '"><div class="k">' + k + '</div><div class="vv">' + (val || '-') + '</div></div>'; }
-      var info = '<div class="sec-title">معلومات المريض</div><div class="info-grid">'
+      var _w    = _latestWeight(p);
+      var _bmi  = calcBmi(_w, p.heightCm);
+      var _kf   = p.kidney || {};
+      var _egfr = calcEgfr(creatToMgDl(_kf.creat, _kf.unit), age, p.sex);
+
+      // شريط الحساسية يُطبع فوق كل شيء — الورقة قد تصل الصيدلية بلا الطبيب
+      var allergyBar = '';
+      if (p.allergyStatus === 'known' && (p.allergies || '').trim()) {
+        allergyBar = '<div style="border:2px solid #dc2626;background:#fef2f2;color:#b91c1c;border-radius:8px;'
+          + 'padding:8px 12px;margin-bottom:10px;font-weight:800;">⚠️ حساسية دوائية: '
+          + escapeHtml(p.allergies) + '</div>';
+      }
+
+      var meds = (p.currentMeds || []).map(function(m) {
+        return escapeHtml([m.name, m.dose, m.freq].filter(function(x) { return (x || '').trim(); }).join(' — '));
+      }).join('<br>');
+      var iv = (p.interventions || []).map(function(v) {
+        return escapeHtml([v.type, v.date ? formatDateAr(v.date) : '', v.detail].filter(function(x) { return (x || '').trim(); }).join(' — '));
+      }).join('<br>');
+      var risks = (function() {
+        var rf = p.riskFactors || {}, out = [];
+        CARDIO_RISK_FACTORS.forEach(function(f) { if (rf[f.key] === 'yes') out.push(f.label); });
+        return out.length ? escapeHtml(out.join('، ')) : '';
+      })();
+      var ac = p.anticoag || {};
+
+      var info = allergyBar + '<div class="sec-title">معلومات المريض</div><div class="info-grid">'
         + cell('الاسم', escapeHtml(p.name || '-'))
         + cell('الهاتف', escapeHtml(p.phone || '-'))
+        + cell('الجنس', p.sex === 'male' ? 'ذكر' : (p.sex === 'female' ? 'أنثى' : '-'))
         + cell('تاريخ الميلاد', p.birthDate ? formatDateAr(p.birthDate) : '-')
         + cell('العمر', age != null ? age + ' سنة' : '-')
         + cell('زمرة الدم', escapeHtml(p.bloodType || '-'))
+        + cell('الطول', p.heightCm ? p.heightCm + ' سم' : '-')
+        + cell('BMI', _bmi != null ? _bmi + ' (' + bmiLabel(_bmi) + ')' : '-')
+        + cell('eGFR', _egfr != null ? _egfr + ' mL/min/1.73m²' : '-')
         + cell('العنوان', escapeHtml(p.address || '-'))
-        + cell('أمراض مزمنة', escapeHtml(p.chronicDiseases || 'لا يوجد'), true)
+        + (ac.on === 'yes' ? cell('مميّع الدم', escapeHtml(ANTICOAG_LABELS[ac.type] || 'نعم')) : '')
+        + (risks ? cell('عوامل الخطورة', risks, true) : '')
+        + (meds  ? cell('الأدوية الجارية', meds, true) : '')
+        + (iv    ? cell('التداخلات السابقة', iv, true) : '')
+        + cell('ملاحظات مرضية', escapeHtml(p.chronicDiseases || 'لا يوجد'), true)
         + '</div>';
       var visits = (p.appointments || []).slice().sort(function(a, b) { return (a.date || '').localeCompare(b.date || ''); });
       var rows = visits.map(function(v, i) { return '<tr><td>' + (i + 1) + '</td><td>' + escapeHtml(v.visitType || '-') + '</td><td>' + formatDateAr(v.date) + '</td><td>' + slotTimeOf(v) + '</td></tr>'; }).join('');

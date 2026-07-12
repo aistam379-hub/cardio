@@ -954,7 +954,9 @@
             <h4 style="font-weight:800;font-size:.9rem;color:var(--primary);margin:0;"><i class="fas fa-id-card" style="margin-left:6px;"></i>معلومات المريض</h4>
             <button onclick="openPatientInfoEditor(currentPatientIdForVisit)" style="display:inline-flex;align-items:center;gap:5px;font-size:.76rem;font-weight:700;color:var(--primary);background:var(--primary-light);border:1.5px solid var(--border-strong);border-radius:8px;padding:5px 12px;cursor:pointer;font-family:inherit;"><i class="fas fa-pen" style="font-size:.68rem;"></i> تعديل</button>
           </div>
+          <div id="chartAllergyBanner"></div>
           <div id="chartInfoGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;"></div>
+          <div id="chartClinicalExtra"></div>
         </div>
 
         <!-- حجز الموعد القادم -->
@@ -1088,7 +1090,7 @@
   <!-- مودال إضافة ملاحظة -->
   <!-- ===== تعديل معلومات المريض ===== -->
   <div id="patientInfoModal" class="hidden fixed inset-0 z-[180] flex items-center justify-center p-4 modal-overlay" onclick="if(event.target===this)closePatientInfoEditor()">
-    <div class="modal-content w-full" style="max-width:480px; border-radius:20px; overflow:hidden; display:flex; flex-direction:column; max-height:92vh;">
+    <div class="modal-content w-full" style="max-width:660px; border-radius:20px; overflow:hidden; display:flex; flex-direction:column; max-height:92vh;">
       <div style="padding:16px 20px;border-bottom:1.5px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
         <h3 style="font-weight:800;font-size:1rem;color:var(--text-primary);"><i class="fas fa-id-card" style="margin-left:6px;color:var(--primary);"></i> معلومات المريض</h3>
         <button onclick="closePatientInfoEditor()" style="width:32px;height:32px;border-radius:8px;border:none;background:var(--bg);color:var(--text-muted);cursor:pointer;"><i class="fas fa-times"></i></button>
@@ -1101,7 +1103,18 @@
           <div><label class="form-label">تاريخ الميلاد <span id="piAgeDisplay" style="color:var(--primary);font-weight:800;"></span></label><input type="date" id="piBirth" class="form-input" style="direction:ltr;" oninput="updatePiAge()"></div>
         </div>
         <div><label class="form-label">العنوان</label><input type="text" id="piAddress" class="form-input" placeholder="المدينة / الحي"></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+          <div><label class="form-label"><i class="fas fa-venus-mars" style="color:var(--primary);margin-left:4px;"></i> الجنس</label>
+            <select id="piSex" class="form-input">
+              <option value="">— غير محدد —</option>
+              <option value="male">ذكر</option>
+              <option value="female">أنثى</option>
+            </select>
+          </div>
+          <div><label class="form-label"><i class="fas fa-ruler-vertical" style="color:var(--primary);margin-left:4px;"></i> الطول (سم)</label>
+            <input type="number" id="piHeight" class="form-input" dir="ltr" min="50" max="250" step="1" placeholder="170" oninput="updatePiBmi()">
+            <div id="piBmiDisplay" style="font-size:.72rem;font-weight:700;color:var(--text-muted);margin-top:4px;"></div>
+          </div>
           <div><label class="form-label"><i class="fas fa-droplet" style="color:#dc2626;margin-left:4px;"></i> زمرة الدم</label>
             <select id="piBlood" class="form-input">
               <option value="">— غير محدد —</option>
@@ -1109,10 +1122,79 @@
               <option>AB+</option><option>AB-</option><option>O+</option><option>O-</option>
             </select>
           </div>
-          <div></div>
         </div>
-        <div><label class="form-label"><i class="fas fa-heart-pulse" style="color:#d97706;margin-left:4px;"></i> أمراض مزمنة</label>
-          <textarea id="piChronic" class="form-input" rows="2" style="resize:vertical;" placeholder="مثال: سكري، ضغط، ربو... (افصل بفاصلة)"></textarea>
+
+        <!-- ═══ الحساسية الدوائية ═══ -->
+        <div style="border:2px solid #fecaca;background:#fef2f2;border-radius:12px;padding:12px;">
+          <label class="form-label" style="color:#b91c1c;"><i class="fas fa-triangle-exclamation" style="margin-left:4px;"></i> الحساسية الدوائية</label>
+          <select id="piAllergyStatus" class="form-input" onchange="updatePiAllergy()">
+            <option value="unknown">— غير معروف —</option>
+            <option value="none">لا توجد حساسية معروفة</option>
+            <option value="known">توجد حساسية</option>
+          </select>
+          <textarea id="piAllergies" class="form-input" rows="2" style="resize:vertical;margin-top:8px;display:none;" placeholder="مثال: أسبرين — شرى وضيق نفس / بنسلين"></textarea>
+        </div>
+
+        <!-- ═══ عوامل الخطورة القلبية ═══ -->
+        <div>
+          <label class="form-label"><i class="fas fa-heart-crack" style="color:#d97706;margin-left:4px;"></i> عوامل الخطورة القلبية</label>
+          <div id="piRiskGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;"></div>
+        </div>
+
+        <!-- ═══ المميّع ═══ -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div><label class="form-label"><i class="fas fa-droplet" style="color:#2563eb;margin-left:4px;"></i> على مميّع؟</label>
+            <select id="piAnticoagOn" class="form-input" onchange="updatePiAnticoag()">
+              <option value="unknown">— غير معروف —</option>
+              <option value="no">لا</option>
+              <option value="yes">نعم</option>
+            </select>
+          </div>
+          <div id="piAnticoagTypeWrap" style="display:none;">
+            <label class="form-label">نوع المميّع</label>
+            <select id="piAnticoagType" class="form-input">
+              <option value="">— غير محدد —</option>
+              <option value="warfarin">وارفارين (يحتاج INR دوري)</option>
+              <option value="doac">DOAC (ريفاروكسابان / أبيكسابان…)</option>
+              <option value="antiplatelet">مضاد صفيحات فقط (أسبرين/كلوبيدوغريل)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- ═══ الوظيفة الكلوية ═══ -->
+        <div>
+          <label class="form-label"><i class="fas fa-flask" style="color:#16a34a;margin-left:4px;"></i> آخر كرياتينين</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+            <input type="number" id="piCreat" class="form-input" dir="ltr" step="0.01" min="0" placeholder="1.0" oninput="updatePiEgfr()">
+            <select id="piCreatUnit" class="form-input" onchange="updatePiEgfr()">
+              <option value="mgdl">mg/dL</option>
+              <option value="umol">µmol/L</option>
+            </select>
+            <input type="date" id="piCreatDate" class="form-input" style="direction:ltr;">
+          </div>
+          <div id="piEgfrDisplay" style="font-size:.76rem;font-weight:700;margin-top:6px;color:var(--text-muted);"></div>
+        </div>
+
+        <!-- ═══ الأدوية الجارية ═══ -->
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <label class="form-label" style="margin:0;"><i class="fas fa-pills" style="color:#7c3aed;margin-left:4px;"></i> الأدوية الجارية</label>
+            <button type="button" onclick="piAddMed()" style="font-size:.74rem;font-weight:700;color:var(--primary);background:var(--primary-light);border:1.5px solid var(--border-strong);border-radius:8px;padding:4px 10px;cursor:pointer;font-family:inherit;"><i class="fas fa-plus" style="font-size:.65rem;"></i> إضافة دواء</button>
+          </div>
+          <div id="piMedsList" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+
+        <!-- ═══ التداخلات القلبية السابقة ═══ -->
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <label class="form-label" style="margin:0;"><i class="fas fa-heart-pulse" style="color:#be185d;margin-left:4px;"></i> التداخلات القلبية السابقة</label>
+            <button type="button" onclick="piAddIntervention()" style="font-size:.74rem;font-weight:700;color:var(--primary);background:var(--primary-light);border:1.5px solid var(--border-strong);border-radius:8px;padding:4px 10px;cursor:pointer;font-family:inherit;"><i class="fas fa-plus" style="font-size:.65rem;"></i> إضافة تداخل</button>
+          </div>
+          <div id="piIntervList" style="display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+
+        <div><label class="form-label"><i class="fas fa-notes-medical" style="color:#d97706;margin-left:4px;"></i> ملاحظات مرضية أخرى</label>
+          <textarea id="piChronic" class="form-input" rows="2" style="resize:vertical;" placeholder="أي أمراض أو ملاحظات غير مغطّاة بالحقول أعلاه"></textarea>
         </div>
       </div>
       <div style="padding:14px 20px;border-top:1.5px solid var(--border);display:flex;gap:10px;">
